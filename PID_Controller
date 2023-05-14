@@ -1,0 +1,123 @@
+#include <Wire.h>
+#include <Adafruit_MCP4725.h>
+Adafruit_MCP4725 dac;
+#define DAC_RESOULTION (9)
+
+
+int values[10];  // Array to store the values
+int sum = 0;  // Sum of the values
+
+//Feedback COnstants
+float Nact;
+float Nref=1200;
+float Nerror;
+float Nprev;
+float Ncurr;
+float summ;
+float diff;
+float dutycycle = 0;
+
+
+// PID constants
+float Kp=0.30;
+float Ki=0.8;
+float Kd=0.2;
+
+// Encoder pin definitions
+#define ENC_A 2
+
+
+// Encoder specification
+const float ENCODER_RESOLUTION = 1024; // Pulse per revolution
+
+
+// Variables for pulse counting
+volatile long pulseCount = 0;
+float pulseCounted = 0;
+float Speed = 0;
+volatile bool flag = false;
+float factor=0;
+
+
+void setup() {
+  // Initialize serial communication for debugging
+  Serial.begin(230400);
+  //Initialize DAC Communication
+  dac.begin(0x60);
+  
+  // Set encoder pins as input with pullup resistors enabled
+  pinMode(ENC_A, INPUT_PULLUP);
+  dac.setVoltage((2.5*4096)/5, false);
+  
+  Wire.begin();
+
+  TCCR1A = 0;                                       // Reset Timer 1 control register A
+  TCCR1B = 0;                                       // Reset Timer 1 control register B
+  TCNT1  = 0;                                       // Reset Timer 1 counter value
+  OCR1A = 31250;                                      // Set the compare match value for a 10ms  delay
+  TCCR1B |= (1 << WGM12);                           // Set Timer 1 to CTC mode
+  TCCR1B |= (1 << CS12) ;                           // Set prescaler to 256 and start the timer
+  TIMSK1 |= (1 << OCIE1A);                          // Enable Timer 1 compare interrupt
+  attachInterrupt(digitalPinToInterrupt(ENC_A), countPulse, RISING);    // Attach interrupt service routine to encoder pins 
+  sei();                                            // enable global interrupts  
+}
+
+
+void countPulse() {
+  // Interrupt service routine for encoder pulse
+  pulseCount++;
+}
+
+
+void loop() {
+
+  if (flag){
+    if (Nact>=980){
+      factor =0.84;
+    }
+    else{
+      factor=0.78;
+      }
+    Nact = (pulseCounted*120*factor)/(ENCODER_RESOLUTION) ;     // Convert pulse count to RPM
+    Serial.print("RPM: ");                                // Print RPM value to serial monitor
+    Serial.println(Nact);
+    PIDControl();
+    //average();
+    pulseCount=0;
+    TCNT1 = 0;
+    flag= false;
+  }       
+}
+
+void PIDControl(){
+  Nerror= Nref-Nact;
+  sum= Nerror+sum;
+  sum=min(max(sum,-3910),+3910);
+  diff= Nprev-Nact;
+  Nprev=Nact;
+  dutycycle = ((Kp*Nerror)+(Kd*diff)+(Ki*sum));
+  delay(100);
+  dutycycle= min(int(dutycycle),3910);
+  dac.setVoltage(int(dutycycle), false);  
+}
+
+void average(){
+  if (Serial.available() >= 10) {  // Wait until we have enough samples
+    for (int i = 0; i < 10; i++) {
+      values[i] = Serial.parseInt();  // Read the samples from the serial monitor
+      sum += values[i];  // Add the value to the sum
+    }
+    float average = (float)sum / 10;  // Calculate the average value
+    Serial.print("Average value: ");
+    Serial.println(average);
+    sum = 0;  // Reset the sum for the next set of samples
+  }
+}
+
+
+ISR(TIMER1_COMPA_vect) {
+  
+  pulseCounted = pulseCount;
+  
+  flag=true;  
+}
